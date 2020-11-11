@@ -93,6 +93,8 @@ def get_urls(url, check, debug):
         sys.stdout.write(u''.join(("image-url=", video["thumbnail"])) + "\n")
     if 'duration' in video:
         sys.stdout.write(u''.join(("duration=", str(float(video["duration"]) * 1000.0))) + "\n")
+    if 'start_time' in video and video['start_time'] is not None:
+        sys.stdout.write(u''.join(("starttime=", str(int(video["start_time"])), '\n')))
 
 if __name__=="__main__":
     arg_parser = argparse.ArgumentParser()
