@@ -76,8 +76,6 @@ def get_urls(url, check, debug):
         sys.stdout.write("TOTEM_PL_PARSER_RESULT_ERROR")
         exit(1)
 
-    print (result)
-
     if 'entries' in result:
         # Can be a playlist or a list of videos
         video = result['entries'][0]
