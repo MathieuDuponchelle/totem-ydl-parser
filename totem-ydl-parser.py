@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+script used by totem-pl-parser.
+It uses the module yt_dlp which, by the given url, will extract all his information.
+"""
+
 # This is free and unencumbered software released into the public domain.
 #
 # Anyone is free to copy, modify, publish, use, compile, sell, or
@@ -26,118 +31,166 @@
 #
 # For more information, please refer to <http://unlicense.org/>
 
-import youtube_dl
-import  argparse
+import argparse
+import json
 import sys
+import yt_dlp
 
-def silent_output(message, skip_eol=False, check_quiet=False):
-    pass
+class TotemYdlLogger:
+    """
+    The Logger given to yt_dlp.YoutubeDl
+    """
+    def __init__(self, enable_debug: bool):
+        self._debug = enable_debug
 
-def get_thumb_url(video):
+    def debug(self, msg: str) -> None:
+        """
+        Print a debug message
+        :param msg: the message to print
+        :return: None
+        """
+        self.show_msg(msg=msg)
+
+    def info(self, msg: str) -> None:
+        """
+        print an info message
+        :param msg: the message to print
+        :return: None
+        """
+        self.show_msg(msg=msg)
+
+    def warning(self, msg: str):
+        """
+        print a warning message
+        :param msg: the message to print
+        :return: None
+        """
+        self.show_msg(msg=msg)
+
+    def error(self, msg: str):
+        """
+        print an error message
+        :param msg: the message to print
+        :return: None
+        """
+        self.show_msg(msg=msg)
+
+    def show_msg(self, msg):
+        """
+        Show the message (only if the debug option is set)
+        :param msg: the message to print
+        :return: None
+        """
+        if self._debug:
+            print(msg)
+
+def parse_results(result: dict, debug: bool) -> str | None:
+    """
+    Parse the information extracted by yt_dlp.YoutubeDL.
+    We only search for the url which have an audio stream AND a video stream and the largest with
+    :param result: the dict given by yt_dlp.YoutubeDL
+    :param debug: if debug is enabled we dump the result
+    :return: the url if found else None
+    """
+    width = 0
     url = None
-    if not 'thumbnails' in video:
-        return url
-    for element in video['thumbnails']:
-        url = element['url']
+
+    if debug:
+        print(json.dumps(obj=result, indent=4))
+
+    for element in result['formats']:
+        if element.get('acodec') != 'none' and element.get('vcodec') != 'none':
+            if element.get('width') is not None and int(element.get('width')) > width:
+                width = element.get('width')
+                url = element.get('url')
+
     return url
 
-def get_video_url(video):
-    url = None
-    last_width = 0
-    if not 'formats' in video:
-        return url
-    for element in video['formats']:
-        if not 'acodec' in element or not 'vcodec' in element:
-            continue
-        if element['acodec'] == 'none' or element['vcodec'] == 'none':
-            continue
-        if not 'url' in element:
-            continue
-        if last_width > element['width']:
-            continue
-        last_width = element['width']
-        url = element['url']
-    return url
+def url_is_valid(ydl: yt_dlp.YoutubeDL, url: str) -> bool:
+    """
+    Check if the yt_dlp has a suitable extractor for this url
+    :param ydl: the instance of YoutubeDL
+    :param url: the url to check
+    :return: TRUE if found the extractor, False otherwise
+    """
+    for name, ie in ydl._ies.items(): # pylint: disable=W0212
+        if name != 'Generic' and ie.suitable(url) and ie.working():
+            return True
+    return False
 
-def get_urls(url, check, debug):
+def extract_url(url: str, check: bool, debug: bool) -> None:
+    """
+    Give the url to YoutubeDL for extracting info
+    :param url: the url
+    :param check: if True we only check if this url can be handled by YoutubeDL
+    :param debug: if True we display the log from  YoutubeDL
+    :return: None
+    """
     ydl_opts = {
-      'format': 'bestaudio/best',
+        'logger': TotemYdlLogger(enable_debug=debug),
+        'verbose': debug,
+        'format': 'bestaudio/best',
+        'noplaylist': True, # if the user give a playlist, it will get only the first video
+        'extractor_args': {
+            'youtube': {
+                # By using the default clients, the quality of YouTube video will be of 360p
+                # Unfortunately using all clients, the script will be slow
+                'player_client':  ['default' ],
+            },
+        },
     }
-    ydl = youtube_dl.YoutubeDL(ydl_opts)
 
-    if not debug:
-        ydl.to_stdout = silent_output
-        ydl.to_stderr = silent_output
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        is_valid = url_is_valid(ydl=ydl, url=url)
+        if check:
+            result = 'TRUE' if is_valid else 'FALSE'
+            print(result, end='')
+            sys.exit(1)
+        elif not is_valid:
+            print('TOTEM_PL_PARSER_RESULT_ERROR', end='')
+            sys.exit(1)
 
-    if check:
-        result = False
-        ies = ydl._ies
-        for ie in ies:
-            if ie.IE_NAME == "generic":
-                continue
-            if debug:
-                print ("checking ", ie.IE_NAME)
-            if ie.suitable(url) and ie.working():
-                if debug:
-                    print (ie.IE_NAME, "is suitable and is working")
-                result = True
-                break
-
-        if result:
-            sys.stdout.write("TRUE")
-        else:
-            sys.stdout.write("FALSE")
-        return
-
-    try:
-        with ydl:
+        try:
             result = ydl.extract_info(
-                url,
-                download=False # We just want to extract the info
+                url=url,
+                download=False,  # We just want to extract the info
             )
-    except Exception as e:
-        if debug:
-            print (e.message)
-        sys.stdout.write("TOTEM_PL_PARSER_RESULT_ERROR")
-        exit(1)
 
-    if 'entries' in result:
-        # Can be a playlist or a list of videos
-        video = result['entries'][0]
+            info_dict = ydl.sanitize_info(info_dict=result)
+            url = parse_results(result=info_dict, debug=debug)
+        except Exception as e: # pylint: disable=W0718
+            if debug:
+                print (e)
+            sys.exit(1)
+
+    if url is not None:
+        print(f"title={result.get('title')}")
+        print(f"id={result.get('id')}")
+        print(f"moreinfos={result.get('webpage_url')}")
+        print(f"duration={result.get('duration_string')}")
+        print(f"url={url}")
+
+        if result.get('thumbnail') is not None:
+            print(f"image-url={result.get('thumbnail')}")
     else:
-        # Just a video
-        video = result
+        print('TOTEM_PL_PARSER_RESULT_ERROR', end='')
 
-    sys.stdout.write(u''.join(("title=", video["title"])) + "\n")
-    sys.stdout.write(u''.join(("id=", video["id"])) + "\n")
-    sys.stdout.write(u''.join(("moreinfo=", video["webpage_url"])) + "\n")
-    video_url = get_video_url(video)
-    sys.stdout.write(u''.join(("url=", video_url)) + "\n")
-    thumb_url = get_thumb_url(video)
-    if thumb_url:
-        sys.stdout.write(u''.join(("image-url=", video["thumbnail"])) + "\n")
-    if 'duration' in video:
-        sys.stdout.write(u''.join(("duration=", str(float(video["duration"]) * 1000.0))) + "\n")
-    if 'start_time' in video and video['start_time'] is not None:
-        sys.stdout.write(u''.join(("starttime=", str(int(video["start_time"])), '\n')))
-
-if __name__=="__main__":
-    arg_parser = argparse.ArgumentParser()
+if __name__ == "__main__":
+    arg_parser = argparse.ArgumentParser(prog='totem-ydl-parser',
+                                         description='Prout')
     arg_parser.add_argument("-u", "--url",
                             action="store", dest="url",
-                            default="",
-                            help="Url to scan or check")
+                            help="Url to scan or check",
+                            required=True)
     arg_parser.add_argument("-c", "--check",
                             action="store_true",
-                            help="only check if the url can be scanned")
+                            help="only check if the url can be scanned",
+                            default=False)
     arg_parser.add_argument("-d", "--debug",
                             action="store_true",
-                            help="enable debug")
+                            help="enable debug",
+                            default=False)
 
     args = arg_parser.parse_args()
 
-    if not args.url:
-        print ("please specify a url to scan or check")
-        exit (1)
-
-    get_urls (args.url, args.check, args.debug)
+    extract_url (url=args.url, check=args.check, debug=args.debug)
